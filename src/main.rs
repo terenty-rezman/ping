@@ -1,5 +1,5 @@
 use std::net::{SocketAddr, ToSocketAddrs};
-use socket2::{Domain, Protocol, Socket, Type};
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 trait ToBigEndian {
     fn to_be_vec(&self) -> Vec<u8>;
@@ -117,12 +117,12 @@ fn create_echo_request_msg(id: u16, seq_num: u16, msg: &str) -> Vec<u8> {
 
 fn main() {
 
-    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4));
+    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
     let remote = "www.google.com".to_socket_addrs().unwrap().next().unwrap();
 
     let packet = create_echo_request_msg(0, 1, "ping");
 
-    socket.send_to
+    socket.send_to(&packet, &SockAddr::from(remote));
 
 
     println!("{:?}", packet);
