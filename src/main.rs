@@ -1,4 +1,8 @@
+use std::io::Result;
+use std::mem::MaybeUninit;
 use std::net::{SocketAddr, ToSocketAddrs};
+use std::time::Duration;
+
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 trait ToBigEndian {
@@ -49,12 +53,12 @@ fn checksum(bytes: &Vec<u8>) -> u16 {
     // https://stackoverflow.com/a/20247802/13847352
     for i in (0..bytes.len()).step_by(2) {
         let two_u8 = &bytes[i..i + 2];
-        let as_u16: u16 = (two_u8[0] as u16) << 8 + two_u8[1];
+        let as_u16: u16 = ((two_u8[0] as u16) << 8) + two_u8[1] as u16;
         sum += as_u16;
     }
     // ones complement
     let sum = !sum;
-    sum 
+    sum
 }
 
 struct ICMPheader {
@@ -112,18 +116,36 @@ fn create_echo_request_msg(id: u16, seq_num: u16, msg: &str) -> Vec<u8> {
     let mut packet: Vec<u8> = packed_header.data;
     packet.append(&mut packed_msg);
 
-    return packet
+    return packet;
 }
 
 fn main() {
-
     let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
-    let remote = "www.google.com".to_socket_addrs().unwrap().next().unwrap();
+    let remote = "www.google.com:80"
+        .to_socket_addrs()
+        .unwrap()
+        .next()
+        .unwrap();
 
     let packet = create_echo_request_msg(0, 1, "ping");
 
-    socket.send_to(&packet, &SockAddr::from(remote));
+    let bytes_sent = socket.send_to(&packet, &SockAddr::from(remote)).unwrap();
 
+    if bytes_sent != packet.len() {
+        panic!("Error sending echo request");
+    }
 
-    println!("{:?}", packet);
+    socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+
+    let mut buffer: [u8; 4096] = [0; 4096];
+    let mut buffer_ptr = &mut buffer as *mut [u8; 4096] as *mut [MaybeUninit<u8>; 4096];
+    let mut buffer_ref = unsafe { &mut (*buffer_ptr) };
+
+    let (len, from) = socket.recv_from(buffer_ref).unwrap();
+
+    let recv_packet = buffer[..len].to_vec();
+
+    println!("{:?}", recv_packet);
 }
