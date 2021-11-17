@@ -31,7 +31,7 @@ impl PackedBytes {
         Self { data: Vec::new() }
     }
 
-    fn push<T>(&mut self, data: T)
+    fn pack<T>(&mut self, data: T)
     where
         T: ToBigEndian,
     {
@@ -88,11 +88,11 @@ fn create_echo_request_header(id: u16, seq_num: u16, checksum: u16) -> ICMPheade
 
 fn pack_header(h: ICMPheader) -> PackedBytes {
     let mut packed = PackedBytes::new();
-    packed.push(h.ty);
-    packed.push(h.code);
-    packed.push(h.checksum);
-    packed.push(h.id);
-    packed.push(h.seq_num);
+    packed.pack(h.ty);
+    packed.pack(h.code);
+    packed.pack(h.checksum);
+    packed.pack(h.id);
+    packed.pack(h.seq_num);
     packed
 }
 
@@ -121,7 +121,7 @@ fn create_echo_request_msg(id: u16, seq_num: u16, msg: &str) -> Vec<u8> {
 
 fn main() {
     let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
-    let remote = "www.google.com:80"
+    let remote = "www.example.com:80"
         .to_socket_addrs()
         .unwrap()
         .next()
@@ -132,7 +132,7 @@ fn main() {
     let bytes_sent = socket.send_to(&packet, &SockAddr::from(remote)).unwrap();
 
     if bytes_sent != packet.len() {
-        panic!("Error sending echo request");
+        panic!("Error sending request");
     }
 
     socket
@@ -140,12 +140,13 @@ fn main() {
         .unwrap();
 
     let mut buffer: [u8; 4096] = [0; 4096];
-    let mut buffer_ptr = &mut buffer as *mut [u8; 4096] as *mut [MaybeUninit<u8>; 4096];
-    let mut buffer_ref = unsafe { &mut (*buffer_ptr) };
+    let buffer_ptr = &mut buffer as *mut [u8; 4096] as *mut [MaybeUninit<u8>; 4096];
+    let buffer_ref = unsafe { &mut (*buffer_ptr) };
 
     let (len, from) = socket.recv_from(buffer_ref).unwrap();
 
-    let recv_packet = buffer[..len].to_vec();
+    // 20 - skip IP header start from ICMP header
+    let recv_packet = buffer[20..len].to_vec();
 
     println!("{:?}", recv_packet);
 }
