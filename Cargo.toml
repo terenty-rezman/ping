@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 socket2 = { version = "0.4.2", features = ["all"] }
 duplicate = "0.3.0"
+colour = "0.6.0"

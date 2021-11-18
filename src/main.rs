@@ -1,9 +1,11 @@
-use std::fmt::Error;
+use std::env;
 use std::io::Result;
-use std::mem::{size_of, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
+use std::{thread, time};
 
+use colour::green;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 trait BigEndianConvert {
@@ -164,21 +166,6 @@ struct IPheader {
 }
 
 impl IPheader {
-    fn new() -> IPheader {
-        IPheader {
-            version_ihl: 0,
-            tos: 0,
-            total_lenght: 0,
-            identification: 0,
-            flags_fragment_offset: 0,
-            ttl: 0,
-            protocol: 0,
-            header_checksum: 0,
-            source_address: 0,
-            destination_address: 0,
-        }
-    }
-
     fn from_packed_bytes(packed: PackedBytes) -> IPheader {
         let mut packed = packed;
         IPheader {
@@ -202,17 +189,19 @@ fn do_one_ping(socket: &Socket, remote: &SocketAddr) -> Result<(Ipv4Addr, u8)> {
     let bytes_sent = socket.send_to(&echo_packet, &SockAddr::from(remote.clone()))?;
 
     if bytes_sent != echo_packet.len() {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "failed to send request"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "failed to send request",
+        ));
     }
 
-    socket
-        .set_read_timeout(Some(Duration::from_secs(5)))?;
+    socket.set_read_timeout(Some(Duration::from_secs(5)))?;
 
     let mut buffer: [u8; 4096] = [0; 4096];
     let buffer_ptr = &mut buffer as *mut [u8; 4096] as *mut [MaybeUninit<u8>; 4096];
     let buffer_ref = unsafe { &mut (*buffer_ptr) };
 
-    let (len, from) = socket.recv_from(buffer_ref)?;
+    let (len, _) = socket.recv_from(buffer_ref)?;
 
     // IP header
     let ip_header = buffer[..20].to_vec();
@@ -225,16 +214,74 @@ fn do_one_ping(socket: &Socket, remote: &SocketAddr) -> Result<(Ipv4Addr, u8)> {
     Ok((source, ip_header.ttl))
 }
 
+fn str_to_ip_address(host: &str) -> Result<(bool, SocketAddr)> {
+    let host = host.to_string();
+    let host = host + ":80";
+
+    let remote_ip_address = host.to_socket_addrs()?.next().unwrap();
+    let dns_resolved = host.chars().any(char::is_alphabetic);
+
+    Ok((dns_resolved, remote_ip_address))
+}
+
 fn main() {
-    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
-    let remote = "www.example.com:80"
-        .to_socket_addrs()
+    let mut args: Vec<String> = env::args().collect();
+
+    println!();
+
+    if args.len() != 2 {
+        println!("Usage: ping target_name\n");
+        return;
+    }
+
+    let remote_host = args.remove(1);
+    let (dns_resolved, remote_ip_address) = match str_to_ip_address(&remote_host) {
+        Ok((dns_resolved, addr)) => (dns_resolved, addr),
+        Err(error) => {
+            println!("{}", &error);
+            return;
+        }
+    };
+
+    // remove :80 suffix from address str
+    let remote_ip_str = remote_ip_address
+        .to_string()
+        .strip_suffix(":80")
         .unwrap()
-        .next()
-        .unwrap();
-    
-    match do_one_ping(&socket, &remote) {
-        Ok((host, ttl)) => println!("Reply from {}: TTL={}", host, ttl),
-        Err(error) => println!("{}", error)
+        .to_string();
+
+    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
+
+    if dns_resolved {
+        println!("Pinging {} {}:", remote_host, remote_ip_str);
+    } else {
+        println!("Pinging {}:", remote_ip_str);
+    }
+
+    for _ in 0..4 {
+        let now = time::Instant::now();
+
+        match do_one_ping(&socket, &remote_ip_address) {
+            Ok((host, ttl)) => {
+                let elapsed = now.elapsed();
+                println!(
+                    "Reply from {}: time={}ms TTL={}",
+                    host,
+                    elapsed.as_millis(),
+                    ttl
+                );
+            }
+            Err(error) => match error.kind() {
+                std::io::ErrorKind::TimedOut => println!("Request timed out."),
+                _ => println!("{}", error),
+            },
+        }
+
+        // sleep up to one sec between pings
+        let elapsed = now.elapsed();
+        let inverval = time::Duration::from_secs(1);
+        if elapsed < inverval {
+            thread::sleep(inverval - elapsed);
+        }
     }
 }
