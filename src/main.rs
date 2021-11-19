@@ -5,7 +5,6 @@ use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 use std::{thread, time};
 
-use colour::green;
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 trait BigEndianConvert {
@@ -102,6 +101,19 @@ struct ICMPheader {
     seq_num: u16,
 }
 
+impl ICMPheader {
+    fn from_packed_bytes(packed: PackedBytes) -> ICMPheader {
+        let mut packed = packed;
+        ICMPheader {
+            seq_num: packed.unpack(),
+            id: packed.unpack(),
+            checksum: packed.unpack(),
+            code: packed.unpack(),
+            ty: packed.unpack(),
+        }
+    }
+}
+
 const ECHO_REQUEST_HEADER: ICMPheader = ICMPheader {
     ty: 8,
     code: 0,
@@ -183,7 +195,36 @@ impl IPheader {
     }
 }
 
-fn do_one_ping(socket: &Socket, remote: &SocketAddr) -> Result<(Ipv4Addr, u8)> {
+fn get_icmp_error_msg(icmp_header: &ICMPheader) -> Option<&'static str> {
+    // https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol
+    return match icmp_header.ty {
+        3 => match icmp_header.code {
+            0 => Some("Destination network unreachable"),
+            1 => Some("Destination host unreachable"),
+            2 => Some("Destination protocol unreachable"),
+            3 => Some("Destination port unreachable"),
+            4 => Some("Fragmentation required, and DF flag set"),
+            5 => Some("Source route failed"),
+            6 => Some("Destination network unknown"),
+            7 => Some("Destination host unknown"),
+            8 => Some("Source host isolated"),
+            9 => Some("Network administratively prohibited"),
+            10 => Some("Host administratively prohibited"),
+            11 => Some("Network unreachable for ToS"),
+            12 => Some("Host unreachable for ToS"),
+            13 => Some("Communication administratively prohibited"),
+            14 => Some("Host Precedence Violation"),
+            15 => Some("Precedence cutoff in effect"),
+            _ => None,
+        },
+        _ => None,
+    };
+}
+
+fn do_one_ping(
+    socket: &Socket,
+    remote: &SocketAddr,
+) -> Result<(Ipv4Addr, u8, Option<&'static str>)> {
     let echo_packet = create_echo_request_msg(0, 1, "ping");
 
     let bytes_sent = socket.send_to(&echo_packet, &SockAddr::from(remote.clone()))?;
@@ -210,8 +251,13 @@ fn do_one_ping(socket: &Socket, remote: &SocketAddr) -> Result<(Ipv4Addr, u8)> {
 
     // 20 - skip IP header start from ICMP header
     let recv_packet = buffer[20..len].to_vec();
+    let icmp_header = recv_packet[..std::mem::size_of::<ICMPheader>()].to_vec();
 
-    Ok((source, ip_header.ttl))
+    let icmp_header_unpacked = ICMPheader::from_packed_bytes(PackedBytes::from_vec(icmp_header));
+
+    let icmp_error_response = get_icmp_error_msg(&icmp_header_unpacked);
+
+    Ok((source, ip_header.ttl, icmp_error_response))
 }
 
 fn str_to_ip_address(host: &str) -> Result<(bool, SocketAddr)> {
@@ -262,14 +308,19 @@ fn main() {
         let now = time::Instant::now();
 
         match do_one_ping(&socket, &remote_ip_address) {
-            Ok((host, ttl)) => {
+            Ok((host, ttl, icmp_error_response)) => {
                 let elapsed = now.elapsed();
-                println!(
-                    "Reply from {}: time={}ms TTL={}",
-                    host,
-                    elapsed.as_millis(),
-                    ttl
-                );
+
+                // if icmp reported some error -> print it 
+                match icmp_error_response {
+                    Some(err_str) => println!("Reply from {}: {}", host, err_str),
+                    None => println!(
+                        "Reply from {}: time={}ms TTL={}",
+                        host,
+                        elapsed.as_millis(),
+                        ttl
+                    ),
+                }
             }
             Err(error) => match error.kind() {
                 std::io::ErrorKind::TimedOut => println!("Request timed out."),
