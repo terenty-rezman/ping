@@ -296,7 +296,11 @@ fn main() {
         .unwrap()
         .to_string();
 
-    let socket = Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap();
+    let socket =
+        Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)).unwrap_or_else(|err| {
+            println!("{}", err);
+            std::process::exit(1);
+        });
 
     if dns_resolved {
         println!("Pinging {} {}:", remote_host, remote_ip_str);
@@ -311,7 +315,7 @@ fn main() {
             Ok((host, ttl, icmp_error_response)) => {
                 let elapsed = now.elapsed();
 
-                // if icmp reported some error -> print it 
+                // if icmp reported some error -> print it
                 match icmp_error_response {
                     Some(err_str) => println!("Reply from {}: {}", host, err_str),
                     None => println!(
